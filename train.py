@@ -21,7 +21,7 @@ from data_utils.dataset_util import input_fn
 
 
 def main(unused_argv):
-  # Using the Winograd non-fused algorithms provides a small performance boost.
+  # Using the Winograd non-fused algorithm provides a small performance boost.
   os.environ['TF_ENABLE_WINOGRAD_NONFUSED'] = '1'
 
   if TrainingConfig.clean_model_dir:
@@ -60,7 +60,7 @@ def main(unused_argv):
     model.train(
         input_fn=lambda: input_fn(True, ModelConfig.data_dir, TrainingConfig.batch_size, TrainingConfig.epochs_per_eval),
         hooks=train_hooks,
-        # steps=1  # For debug
+        # steps=1  # For debugging
     )
 
     tf.logging.info("Start evaluation.")
