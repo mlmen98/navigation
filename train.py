@@ -64,6 +64,7 @@ def main(unused_argv):
     )
 
     tf.logging.info("Start evaluation.")
+    
     # Evaluate the model and print results
     eval_results = model.evaluate(
         # Batch size must be 1 for testing because the images' size differs
