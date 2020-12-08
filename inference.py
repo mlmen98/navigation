@@ -1,4 +1,4 @@
-"""Run inference a DeepLab v3 model using tf.estimator API."""
+"""Run inference using a DeepLab v3 model using tf.estimator API."""
 
 from __future__ import absolute_import
 from __future__ import division
