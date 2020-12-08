@@ -60,7 +60,7 @@ def main(unused_argv):
     model.train(
         input_fn=lambda: input_fn(True, ModelConfig.data_dir, TrainingConfig.batch_size, TrainingConfig.epochs_per_eval),
         hooks=train_hooks,
-        # steps=1  # For debug
+        # steps=1  # For debugging
     )
 
     tf.logging.info("Start evaluation.")
