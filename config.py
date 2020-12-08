@@ -2,9 +2,9 @@ class ModelConfig(object):
     data_dir = None
     debug = 'store_true'
     # debug = False
-    # interest_label = [6, 7, 8, 9, 10]
-    # num_classes = len(interest_label) + 1 # extra for background
-    num_classes = 30
+    interest_label = [6, 7, 8, 9, 10]
+    num_classes = len(interest_label) + 1 # extra for background
+    classification_categories = ['move_forward', 'turn_left', 'turn_right', 'turn_around', 'target_found']
     height = 513
     width = 513
     depth = 3

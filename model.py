@@ -125,21 +125,20 @@ def model_fn(features, labels, mode, params=None):
             })
     # optimization opt
     # TODO: deal with classification and segmentation labels void input
-    classification_labels = None
-    segmentation_labels = labels
-    # loss for classification branch
-    if classification_labels is not None:
-        classification_loss = tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(classification_labels, classification_p))
-    else:
-        classification_loss = tf.constant(0.0, dtype=tf.float32)
+    classification_labels, segmentation_labels = cl_label, labels
+    # loss for classification branch, filter out invalid data
+    valid_indices = tf.to_int32(classification_labels >= 0)
+    classification_p = tf.dynamic_partition(classification_p, valid_indices, num_partitions=2)[1]
+    classification_labels = tf.dynamic_partition(classification_labels, valid_indices, num_partitions=2)[1]
+    classification_loss = tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(classification_labels, classification_p))
     # loss for segmentation
-    if segmentation_labels is not None:
-        segmentation_p = tf.reshape(segmentation_p, [-1, ModelConfig.num_classes])
-        segmentation_loss = tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(tf.keras.backend.flatten(segmentation_labels), segmentation_p))
-        # TODO: runinto NaN loss error without this
-        segmentation_loss = tf.keras.backend.clip(segmentation_loss, 1e-4, 1e3)
-    else:
-        segmentation_loss = tf.constant(0.0, dtype=tf.float32)
+    segmentation_p = tf.reshape(segmentation_p, [-1, ModelConfig.num_classes])
+    valid_indices = tf.to_int32(classification_labels < 255)
+    segmentation_labels = tf.dynamic_partition(segmentation_labels, valid_indices, num_partitions=2)[1]
+    segmentation_p = tf.dynamic_partition(segmentation_p, valid_indices, num_partitions=2)[1]
+    segmentation_loss = tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(tf.keras.backend.flatten(segmentation_labels), segmentation_p))
+    # TODO: runinto NaN loss error without this
+    segmentation_loss = tf.keras.backend.clip(segmentation_loss, 1e-4, 1e3)
     overall_loss = classification_loss + segmentation_loss
     # Create a tensor -losses for logging purposes.
     tf.identity(classification_loss, name='classification_loss')

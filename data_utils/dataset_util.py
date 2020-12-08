@@ -1,26 +1,30 @@
-# Copyright 2017 The TensorFlow Authors. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# ==============================================================================
-
-"""Utility functions for creating TFRecord data sets.
-source: https://github.com/tensorflow/models/blob/master/research/object_detection/utils/dataset_util.py
+"""
+utils functions for data set preparation
 """
 import os
 
 import tensorflow as tf
 from config import ModelConfig
 from data_utils import preprocessing
+
+
+def read_classification_data(data_dir, interested_categories=None):
+    """
+    read classification data from given folder and output a list of [[image_dir], [corresponding labels]]
+    :param data_dir: dataset folder
+    :return: a tupe of (data_set, label)
+    """
+    if interested_categories is None:
+        interested_categories = ModelConfig.classification_categories
+    file_list = get_file_list(data_dir)
+    data_set = []
+    label = []
+    for index, item in enumerate(interested_categories):
+        cate = list(filter(lambda x: item in x, file_list))
+        cate_label = [index]*len(cate)
+        data_set += cate
+        label += cate_label
+    return data_set, label
 
 
 def get_file_list(folder_dir):
@@ -128,14 +132,14 @@ def get_filenames(is_training, data_dir):
     A list of file names.
   """
   if is_training:
-    return ['D:\herschel\\navigation\\tf_records\\fine_train.record']
+    return ['D:\herschel\\navigation\\tf_records\\fine_combine_train.record']
   else:
-    return ['D:\herschel\\navigation\\tf_records\\fine_val.record']
+    return ['D:\herschel\\navigation\\tf_records\\fine_combine_val.record']
 
 
 def parse_record(raw_record):
-  """Parse PASCAL image and label from a tf record."""
-  keys_to_features = {
+    """Parse PASCAL image and label from a tf record."""
+    keys_to_features = {
       'image/height':
       tf.FixedLenFeature((), tf.int64),
       'image/width':
@@ -144,31 +148,34 @@ def parse_record(raw_record):
       tf.FixedLenFeature((), tf.string, default_value=''),
       'image/format':
       tf.FixedLenFeature((), tf.string, default_value='png'),
-      'label/encoded':
+      'label/cl_label':
+      tf.FixedLenFeature((), tf.int64),
+      'label/seg_label':
       tf.FixedLenFeature((), tf.string, default_value=''),
       'label/format':
       tf.FixedLenFeature((), tf.string, default_value='png'),
-  }
+    }
 
-  parsed = tf.parse_single_example(raw_record, keys_to_features)
+    parsed = tf.parse_single_example(raw_record, keys_to_features)
 
-  # height = tf.cast(parsed['image/height'], tf.int32)
-  # width = tf.cast(parsed['image/width'], tf.int32)
+    # height = tf.cast(parsed['image/height'], tf.int32)
+    # width = tf.cast(parsed['image/width'], tf.int32)
 
-  image = tf.image.decode_image(
+    image = tf.image.decode_image(
       tf.reshape(parsed['image/encoded'], shape=[]), 3)
-  image = tf.to_float(tf.image.convert_image_dtype(image, dtype=tf.uint8))
-  image.set_shape([None, None, 3])
+    image = tf.to_float(tf.image.convert_image_dtype(image, dtype=tf.uint8))
+    image.set_shape([None, None, 3])
+    #  segmentation labels
+    label = tf.image.decode_image(
+      tf.reshape(parsed['label/seg_label'], shape=[]), 1)
+    label = tf.to_int32(tf.image.convert_image_dtype(label, dtype=tf.uint8))
+    label.set_shape([None, None, 1])
+    # classification label
+    cl_class = parsed['label/cl_label']
+    return image, cl_class, label
 
-  label = tf.image.decode_image(
-      tf.reshape(parsed['label/encoded'], shape=[]), 1)
-  label = tf.to_int32(tf.image.convert_image_dtype(label, dtype=tf.uint8))
-  label.set_shape([None, None, 1])
 
-  return image, label
-
-
-def preprocess_image(image, label, is_training):
+def preprocess_image(image, cl_class, label, is_training):
   """Preprocess a single image of layout [height, width, depth]."""
   if is_training:
     # Randomly scale the image and label.
@@ -176,14 +183,14 @@ def preprocess_image(image, label, is_training):
         image, label, ModelConfig.min_scale, ModelConfig.max_scale)
 
     # Randomly crop or pad a [_HEIGHT, _WIDTH] section of the image and label.
-    image, label = preprocessing.random_crop_or_pad_image_and_label(
-        image, label, ModelConfig.height, ModelConfig.width, ModelConfig.ignore_label)
+    # image, label = preprocessing.random_crop_or_pad_image_and_label(
+    #     image, label, ModelConfig.height, ModelConfig.width, ModelConfig.ignore_label)
 
     # Randomly flip the image and label horizontally.
     image, label = preprocessing.random_flip_left_right_image_and_label(
         image, label)
     # select interested labels
-    # label = preprocessing.categories_selection(label, ModelConfig.interest_label)
+    label = preprocessing.categories_selection(label, ModelConfig.interest_label)
     image.set_shape([ModelConfig.height, ModelConfig.width, 3])
     label.set_shape([ModelConfig.height, ModelConfig.width, 1])
 
@@ -216,7 +223,7 @@ def input_fn(is_training, data_dir, batch_size, num_epochs=1):
 
   dataset = dataset.map(parse_record)
   dataset = dataset.map(
-      lambda image, label: preprocess_image(image, label, is_training))
+      lambda image, cl_class, label: preprocess_image(image, cl_class, label, is_training))
   dataset = dataset.prefetch(batch_size)
 
   # We call repeat after shuffling, rather than before, to prevent separate
@@ -225,12 +232,11 @@ def input_fn(is_training, data_dir, batch_size, num_epochs=1):
   dataset = dataset.batch(batch_size)
 
   iterator = dataset.make_one_shot_iterator()
-  images, labels = iterator.get_next()
+  images, cl_class, labels = iterator.get_next()
 
-  return images, labels
+  return images, cl_class, labels
 
 
 if __name__ == '__main__':
-    train_labels = read_examples_list('D:\herschel\\navigation\data\gtFine_trainvaltest\gtFine\\train')
-    train_img = get_file_list('D:\herschel\\navigation\data\leftImg8bit_trainvaltest\leftImg8bit\\train')
+    data_set, label = read_classification_data('D:\herschel\\navigation\data\classification\\train')
     pass
