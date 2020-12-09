@@ -1,12 +1,13 @@
 class ModelConfig(object):
     data_dir = None
-    debug = 'store_true'
-    # debug = False
-    interest_label = [6, 7, 8, 9, 10]
-    num_classes = len(interest_label) + 1 # extra for background
+    # debug = 'store_true'
+    debug = False
+    interest_label = [6, 7, 8, 9, 10] # road/flat/sidewalk etc.
+    seg_num_classes = 2 # foreground/background
     classification_categories = ['move_forward', 'turn_left', 'turn_right', 'turn_around', 'target_found']
-    height = 513
-    width = 513
+    classification_num_classes = len(classification_categories)
+    height = 512
+    width = 512
     depth = 3
     min_scale = 0.5
     max_scale = 2.0
@@ -23,11 +24,11 @@ class TrainingConfig(object):
     train_epochs = 10
     epochs_per_eval = 1
     tensorboard_images_max_outputs = 6
-    batch_size = 4
+    batch_size = 8
     learning_rate_policy = 'poly' # choices=['poly', 'piecewise']
     max_iter = 30000
     base_architecture = 'resnet_v2_50' # choices=['resnet_v2_50', 'resnet_v2_101']
-    initial_learning_rate = 7e-1
+    initial_learning_rate = 5e-2
     end_learning_rate = 1e-6
     initial_global_step = 0
     power = 0.9

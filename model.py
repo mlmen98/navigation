@@ -19,7 +19,7 @@ def atrous_spatial_pyramid_pooling_keras(inputs, output_stride, depth=256):
     atrous_rates = [6, 12, 18]
     if output_stride == 8:
         atrous_rates = [2*item for item in atrous_rates]
-    with tf.name_scope('atrous_pyramid_pooling'):
+    with tf.variable_scope('atrous_pyramid_pooling'):
         conv_1x1 = tf.keras.layers.Conv2D(depth, (1, 1), strides=1, padding='same')(inputs)
         conv_3x3_list = []
         for item in atrous_rates:
@@ -38,31 +38,37 @@ def atrous_spatial_pyramid_pooling_keras(inputs, output_stride, depth=256):
             return net
 
 
-def classification_branch(x, class_num):
+def classification_branch(x):
     """
     classification branch
     :param x: input tensor
     :return: a tensor
     """
-    with tf.name_scope('classification_branch'):
+    with tf.variable_scope('classification_branch'):
         x = tf.keras.layers.Flatten()(x)
         x = tf.keras.layers.Dense(512, 'relu')(x)
-        x = tf.keras.layers.Dense(class_num, activation='softmax')(x)
+        x = tf.keras.layers.Dense(ModelConfig.classification_num_classes, activation='softmax')(x)
     return x
 
 
-def segmentation_branch(x):
+def segmentation_branch(x, image_size):
     """
     segmentation branch
     :param x:
     :return: a tensor
     """
-    with tf.name_scope('segmentation_branch'):
-        x = atrous_spatial_pyramid_pooling_keras(x, 16, 256)
-    return x
+    with tf.variable_scope('segmentation_branch'):
+        x = atrous_spatial_pyramid_pooling_keras(x, 8, 256)
+    # extract output tensor of block4
+        with tf.variable_scope("upsampling_logits"):
+                net = tf.keras.layers.Conv2D(ModelConfig.seg_num_classes, (1, 1), strides=1, padding='same', activation=None)(
+                    x)
+                logits = tf.image.resize_bilinear(net, image_size, name='upsample')
+                segmentation_result = tf.nn.softmax(logits, name='softmax_tensor')
+    return segmentation_result
 
 
-def model_generator(class_num):
+def model_generator():
     # TODO: add mode param to disable BN at testing phase
     def build_model(x):
         """
@@ -71,37 +77,68 @@ def model_generator(class_num):
         :return: tensor lost of [classification_result, segmentation_result]
         """
         # feature extraction backbone
-        backbone = tf.keras.applications.VGG16(input_tensor=x, include_top=False, pooling=True, weights='imagenet', input_shape=(513, 513, 3))
+        with tf.variable_scope('VGG'):
+            backbone = tf.keras.applications.VGG16(input_tensor=x, include_top=False, pooling=True, weights='imagenet', input_shape=(513, 513, 3))
         # extract block-4 of vgg with downsample of 3 times(8)
         feature_for_segmentation = backbone.get_layer('block4_conv3').output
         feature_for_classification = backbone.output
+        # both branch output probabilities not logits
         # branch 0 for classification
-        classification_result = classification_branch(feature_for_classification, class_num)
+        classification_result = classification_branch(feature_for_classification)
         # branch 1 for segmentation
-        segmentation_feature = segmentation_branch(feature_for_segmentation)
-        inputs_size = tf.shape(x)[1:3]
-        # extract output tensor of block4
-        with tf.variable_scope("upsampling_logits"):
-            net = tf.keras.layers.Conv2D(ModelConfig.num_classes, (1, 1), strides=1, padding='same', activation='linear')(segmentation_feature)
-            logits = tf.image.resize_bilinear(net, inputs_size, name='upsample')
-            segmentation_result = tf.nn.softmax(logits, name='softmax_tensor')
-        return [classification_result, segmentation_result]
+        segmentation_result = segmentation_branch(feature_for_segmentation, x.shape[1:3])
+        return classification_result, segmentation_result
     return build_model
+
+
+def split_vgg_var():
+    all_var = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, 'VGG')
+    head_var = all_var[:20]
+    tail_var = all_var[20:]
+    return head_var, tail_var
+
+
+def drop_bn_weight(var_list):
+    """
+    drop BN DELTA/GAMMA weight, thus disable BN
+    :param var_list:
+    :return:
+    """
+    var_list = [v for v in var_list
+                      if 'beta' not in v.name and 'gamma' not in v.name]
+    return var_list
+
+
+def get_train_var(free_vgg, bn_trainable):
+    """
+    get train var list to two branch
+    :param free_vgg:
+    :param bn_trainable:
+    :return:
+    """
+    vgg_head_var, vgg_tail_var = split_vgg_var()
+    classification_train_var = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, 'classification_branch')
+    segmentation_train_var = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, 'segmentation_branch')
+    if not free_vgg:
+        classification_train_var += tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, 'VGG')
+        segmentation_train_var += vgg_head_var
+    if not bn_trainable:
+        classification_train_var = drop_bn_weight(classification_train_var)
+        segmentation_train_var = drop_bn_weight(segmentation_train_var)
+    return classification_train_var, segmentation_train_var
 
 
 def model_fn(features, labels, mode, params=None):
     """
-    Model function for tensorflow estimator
+    Model function for tensorflow estimator, check tensorflow.org for detail model_fn construct
     """
-    # input image preprocessing
-    if isinstance(features, dict):
-        features = features['feature']
-    images = tf.cast(
-        tf.map_fn(preprocessing.mean_image_addition, features),
-        tf.uint8)
+    classification_labels = labels['cl_class']
+    segmentation_labels = labels['seg_labels']
     # extract and process output/predictions
-    network = model_generator(ModelConfig.num_classes)
+    network = model_generator()
+    # all outputs are probabilities, not logits
     classification_p, segmentation_p = network(features)
+    # tf.identity(classification_p, name='classification_p')
     classification_pred_classes = tf.argmax(classification_p, axis=1)
     segmentation_pred_classes = tf.expand_dims(tf.argmax(segmentation_p, axis=3, output_type=tf.int32), axis=3)
     predictions = {
@@ -124,49 +161,47 @@ def model_fn(features, labels, mode, params=None):
                     predictions_without_decoded_labels)
             })
     # optimization opt
-    # TODO: deal with classification and segmentation labels void input
-    classification_labels, segmentation_labels = cl_label, labels
     # loss for classification branch, filter out invalid data
     valid_indices = tf.to_int32(classification_labels >= 0)
     classification_p = tf.dynamic_partition(classification_p, valid_indices, num_partitions=2)[1]
     classification_labels = tf.dynamic_partition(classification_labels, valid_indices, num_partitions=2)[1]
-    classification_loss = tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(classification_labels, classification_p))
-    # loss for segmentation
-    segmentation_p = tf.reshape(segmentation_p, [-1, ModelConfig.num_classes])
-    valid_indices = tf.to_int32(classification_labels < 255)
+    classification_pred_classes = tf.dynamic_partition(classification_pred_classes, valid_indices, num_partitions=2)[1]
+    # set classification_loss close to zero(1e-4) if there're no classification sample input
+    classification_loss = tf.cond(tf.greater(tf.reduce_sum(valid_indices), 1), # at least one sample
+                                             lambda : tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(classification_labels, classification_p)),
+                                             lambda : tf.constant(1e-4, dtype=tf.float32))
+    classification_loss = tf.keras.backend.clip(classification_loss, 1e-4, 1e3)
+    # loss for segmentation, filter out invalid data
+    segmentation_labels = tf.reshape(segmentation_labels, (-1,))
+    segmentation_p = tf.reshape(segmentation_p, [-1, ModelConfig.seg_num_classes])
+    valid_indices = tf.to_int32(segmentation_labels < 255)
     segmentation_labels = tf.dynamic_partition(segmentation_labels, valid_indices, num_partitions=2)[1]
     segmentation_p = tf.dynamic_partition(segmentation_p, valid_indices, num_partitions=2)[1]
-    segmentation_loss = tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(tf.keras.backend.flatten(segmentation_labels), segmentation_p))
-    # TODO: runinto NaN loss error without this
+    segmentation_pred_classes = tf.reshape(segmentation_pred_classes, (-1,))
+    segmentation_pred_classes = tf.dynamic_partition(segmentation_pred_classes, valid_indices, num_partitions=2)[1]
+    segmentation_loss = tf.cond(tf.greater(tf.reduce_sum(valid_indices), 1), # at least one sample
+                                             lambda : tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(tf.keras.backend.flatten(segmentation_labels), segmentation_p)),
+                                             lambda : tf.constant(1e-4, dtype=tf.float32))
     segmentation_loss = tf.keras.backend.clip(segmentation_loss, 1e-4, 1e3)
-    overall_loss = classification_loss + segmentation_loss
-    # Create a tensor -losses for logging purposes.
+    # for debug
     tf.identity(classification_loss, name='classification_loss')
     tf.summary.scalar('classification_loss', classification_loss)
     tf.identity(segmentation_loss, name='segmentation_loss')
     tf.summary.scalar('segmentation_loss', segmentation_loss)
-    tf.identity(overall_loss, name='overall_loss')
-    tf.summary.scalar('overall_loss', overall_loss)
     # get trainable weight except bn params
-    if not TrainingConfig.freeze_batch_norm:
-        train_var_list = [v for v in tf.trainable_variables()]
-    else:
-        train_var_list = [v for v in tf.trainable_variables()
-                          if 'beta' not in v.name and 'gamma' not in v.name]
+    cl_train_var, seg_train_var = get_train_var(free_vgg=True, bn_trainable=True)
     # Add weight decay to the loss.
-    with tf.variable_scope("total_loss"):
-        loss = overall_loss + TrainingConfig.weight_decay * tf.add_n(
-            [tf.nn.l2_loss(v) for v in train_var_list])
-    if classification_labels is not None:
-        classification_acc = tf.metrics.accuracy(classification_labels, classification_pred_classes)
-    else:
-        # set to zero
-        classification_acc = tf.metrics.accuracy(tf.constant([1]), tf.constant([0]))
-    if segmentation_labels is not None:
-        segmentation_acc = tf.metrics.accuracy(segmentation_labels, segmentation_pred_classes)
-    else:
-        # set to zero
-        segmentation_acc = tf.metrics.accuracy(tf.constant([1]), tf.constant([0]))
+    # segmentation_loss_l2 = segmentation_loss + TrainingConfig.weight_decay * tf.add_n(
+    #     [tf.nn.l2_loss(v) for v in seg_train_var])
+    # classification_loss_l2 = classification_loss + TrainingConfig.weight_decay * tf.add_n(
+    #     [tf.nn.l2_loss(v) for v in cl_train_var])
+    classification_loss_l2 = classification_loss
+    segmentation_loss_l2 = segmentation_loss
+    total_loss = segmentation_loss_l2 + classification_loss_l2
+    tf.identity(total_loss, name='total_loss')
+    tf.summary.scalar('total_loss', total_loss)
+    classification_acc = tf.metrics.accuracy(classification_labels, classification_pred_classes)
+    segmentation_acc = tf.metrics.accuracy(segmentation_labels, segmentation_pred_classes)
     # mean_iou = tf.metrics.mean_iou(segmentation_labels, segmentation_pred_classes, ModelConfig.num_classes)
     # metrics = {'classification_acc': classification_acc, 'segmentation_px_acc': segmentation_acc, 'mean_iou': mean_iou}
     metrics = {'segmentation_px_acc': segmentation_acc}
@@ -206,20 +241,26 @@ def model_fn(features, labels, mode, params=None):
         tf.identity(learning_rate, name='learning_rate')
         tf.summary.scalar('learning_rate', learning_rate)
 
-        # optimizer = tf.train.MomentumOptimizer(
-        #     learning_rate=learning_rate,
-        #     momentum=TrainingConfig.momentum)
-        optimizer = tf.train.AdamOptimizer(learning_rate=1e-2)
+        optimizer_cl = tf.train.MomentumOptimizer(
+            learning_rate=learning_rate,
+            momentum=TrainingConfig.momentum)
+        optimizer_seg = tf.train.MomentumOptimizer(
+            learning_rate=learning_rate,
+            momentum=TrainingConfig.momentum)
+        # optimizer = tf.train.AdamOptimizer(learning_rate=1e-2)
 
         # Batch norm requires update ops to be added as a dependency to the train_op
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
-            train_op = optimizer.minimize(loss, global_step, var_list=train_var_list)
+            train_op_cl = optimizer_cl.minimize(classification_loss_l2, global_step, var_list=cl_train_var)
+            train_op_seg = optimizer_seg.minimize(segmentation_loss_l2, global_step, var_list=seg_train_var)
+            train_op = tf.group(train_op_cl, train_op_seg)
+            # train_op = train_op_cl
     else:
         train_op = None
     return tf.estimator.EstimatorSpec(
         mode=mode,
         predictions=predictions,
-        loss=loss,
+        loss=total_loss,
         train_op=train_op,
         eval_metric_ops=metrics)

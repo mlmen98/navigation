@@ -40,14 +40,16 @@ def main(unused_argv):
   for _ in range(TrainingConfig.train_epochs // TrainingConfig.epochs_per_eval):
     tensors_to_log = {
       'learning_rate': 'learning_rate',
-      'overall_loss': 'overall_loss',
+      'total_loss': 'total_loss',
+      'classification_loss': 'classification_loss',
+      'segmentation_loss' : 'segmentation_loss',
       'segmentation_px_acc': 'segmentation_px_acc',
-      # 'classification_acc': 'classification_acc',
+      'classification_acc': 'classification_acc',
       # 'mean_iou': 'mean_iou',
     }
 
     logging_hook = tf.train.LoggingTensorHook(
-        tensors=tensors_to_log, every_n_iter=10)
+        tensors=tensors_to_log, every_n_iter=1)
     train_hooks = [logging_hook]
     eval_hooks = None
 

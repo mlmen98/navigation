@@ -27,8 +27,12 @@ def categories_selection(label, interest_label_list):
     :param interest_label_list:
     :return:
     """
+    label_list = []
     for item in interest_label_list:
-        label = tf.where(label == item, tf.ones_like(label), tf.zeros_like(label))
+        label_list.append(tf.where(label == item, tf.ones_like(label), tf.zeros_like(label)))
+    label = tf.stack(label_list, axis=2)
+    label = tf.squeeze(label, axis=-1)
+    label = tf.reduce_sum(label, axis=2, keep_dims=True)
     return label
 
 
@@ -183,7 +187,8 @@ def random_crop_or_pad_image_and_label(image, label, crop_height, crop_width, ig
     If `images` was 3-D, a 3-D float Tensor of shape
     `[new_height, new_width, channels]`.
   """
-  label = label - ignore_label  # Subtract due to 0 padding.
+  if ignore_label is not None:
+    label = label - ignore_label  # Subtract due to 0 padding.
   label = tf.to_float(label)
   image_height = tf.shape(image)[0]
   image_width = tf.shape(image)[1]
@@ -197,10 +202,31 @@ def random_crop_or_pad_image_and_label(image, label, crop_height, crop_width, ig
 
   image_crop = image_and_label_crop[:, :, :3]
   label_crop = image_and_label_crop[:, :, 3:]
-  label_crop += ignore_label
+  if ignore_label is not None:
+    label_crop += ignore_label
   label_crop = tf.to_int32(label_crop)
 
   return image_crop, label_crop
+
+
+def resize_or_padding_image(image, seg_labels, height, width):
+    """
+    resize method for classification branch images
+    :param image:
+    :param seg_labels:
+    :param height:
+    :param width:
+    :return:
+    """
+    image = tf.expand_dims(image, axis=0)
+    seg_labels = tf.expand_dims(seg_labels, axis=0)
+    image = tf.image.resize_bilinear(image, tf.constant([height, width]))
+    label = tf.image.resize_bilinear(seg_labels, tf.constant([height, width]))
+    image = tf.squeeze(image, axis=0)
+    image = tf.cast(image, tf.float32)
+    label = tf.squeeze(label, axis=0)
+    label = tf.cast(label, tf.float32)
+    return image, label
 
 
 def random_flip_left_right_image_and_label(image, label):
@@ -222,60 +248,3 @@ def random_flip_left_right_image_and_label(image, label):
   return image, label
 
 
-def eval_input_fn(image_filenames, label_filenames=None, batch_size=1):
-  """An input function for evaluation and inference.
-
-  Args:
-    image_filenames: The file names for the inferred images.
-    label_filenames: The file names for the grand truth labels.
-    batch_size: The number of samples per batch. Need to be 1
-        for the images of different sizes.
-
-  Returns:
-    A tuple of images and labels.
-  """
-  # Reads an image from a file, decodes it into a dense tensor
-  def _parse_function(filename, is_label):
-    if not is_label:
-      image_filename, label_filename = filename, None
-    else:
-      image_filename, label_filename = filename
-
-    image_string = tf.read_file(image_filename)
-    image = tf.image.decode_image(image_string)
-    image = tf.to_float(tf.image.convert_image_dtype(image, dtype=tf.uint8))
-    image.set_shape([None, None, 3])
-
-    image = mean_image_subtraction(image)
-
-    if not is_label:
-      return image
-    else:
-      label_string = tf.read_file(label_filename)
-      label = tf.image.decode_image(label_string)
-      label = tf.to_int32(tf.image.convert_image_dtype(label, dtype=tf.uint8))
-      label.set_shape([None, None, 1])
-
-      return image, label
-
-  if label_filenames is None:
-    input_filenames = image_filenames
-  else:
-    input_filenames = (image_filenames, label_filenames)
-
-  dataset = tf.data.Dataset.from_tensor_slices(input_filenames)
-  if label_filenames is None:
-    dataset = dataset.map(lambda x: _parse_function(x, False))
-  else:
-    dataset = dataset.map(lambda x, y: _parse_function((x, y), True))
-  dataset = dataset.prefetch(batch_size)
-  dataset = dataset.batch(batch_size)
-  iterator = dataset.make_one_shot_iterator()
-
-  if label_filenames is None:
-    images = iterator.get_next()
-    labels = None
-  else:
-    images, labels = iterator.get_next()
-
-  return images, labels
