@@ -21,20 +21,24 @@ def atrous_spatial_pyramid_pooling_keras(inputs, output_stride, depth=256):
         atrous_rates = [2*item for item in atrous_rates]
     with tf.variable_scope('atrous_pyramid_pooling'):
         conv_1x1 = tf.keras.layers.Conv2D(depth, (1, 1), strides=1, padding='same')(inputs)
+        # conv_1x1 = tf.nn.batch_normalization(conv_1x1)
         conv_3x3_list = []
         for item in atrous_rates:
             conv_3x3 = tf.keras.layers.Conv2D(depth, (3, 3), strides=1, dilation_rate=item, padding='same')(inputs)
+            # conv_3x3 = tf.nn.batch_normalization(conv_3x3)
             conv_3x3_list.append(conv_3x3)
         with tf.variable_scope("image_level_features"):
             # global average pooling
             image_level_features = tf.reduce_mean(inputs, [1, 2], name='global_average_pooling', keepdims=True)
             # 1×1 convolution with 256 filters( and batch normalization)
             image_level_features = tf.keras.layers.Conv2D(depth, (1, 1), strides=1, padding='same')(image_level_features)
+            # image_level_features = tf.nn.batch_normalization(image_level_features)
             # bilinearly upsample features
             inputs_size = tf.shape(inputs)[1:3]
             image_level_features = tf.image.resize_bilinear(image_level_features, inputs_size, name='upsample')
             net = tf.concat([conv_1x1]+conv_3x3_list+[image_level_features], axis=3, name='concat')
             net = tf.keras.layers.Conv2D(depth, (1, 1), strides=1, padding='same')(net)
+            # net = tf.nn.batch_normalization(net)
             return net
 
 
@@ -47,6 +51,7 @@ def classification_branch(x):
     with tf.variable_scope('classification_branch'):
         x = tf.keras.layers.Flatten()(x)
         x = tf.keras.layers.Dense(512, 'relu')(x)
+        x = tf.nn.dropout(x, 0.5)
         x = tf.keras.layers.Dense(ModelConfig.classification_num_classes, activation='softmax')(x)
     return x
 
@@ -130,17 +135,17 @@ def get_train_var(free_vgg, bn_trainable):
 
 def model_fn(features, labels, mode, params=None):
     """
-    Model function for tensorflow estimator, check tensorflow.org for detail model_fn construct
+    Model function for tensorflow estimator, check tensorflow.org for detail model_fn construction
     """
     classification_labels = labels['cl_class']
-    segmentation_labels = labels['seg_labels']
+    segmentation_labels = segmentation_labels_buffer = labels['seg_labels']
     # extract and process output/predictions
     network = model_generator()
     # all outputs are probabilities, not logits
     classification_p, segmentation_p = network(features)
     # tf.identity(classification_p, name='classification_p')
     classification_pred_classes = tf.argmax(classification_p, axis=1)
-    segmentation_pred_classes = tf.expand_dims(tf.argmax(segmentation_p, axis=3, output_type=tf.int32), axis=3)
+    segmentation_pred_classes = segmentation_pred_buffer = tf.expand_dims(tf.argmax(segmentation_p, axis=3, output_type=tf.int32), axis=3)
     predictions = {
         'classification_classes': classification_pred_classes,
         'classification_probabilities': tf.reduce_max(classification_p, axis=1),
@@ -169,8 +174,7 @@ def model_fn(features, labels, mode, params=None):
     # set classification_loss close to zero(1e-4) if there're no classification sample input
     classification_loss = tf.cond(tf.greater(tf.reduce_sum(valid_indices), 1), # at least one sample
                                              lambda : tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(classification_labels, classification_p)),
-                                             lambda : tf.constant(1e-4, dtype=tf.float32))
-    classification_loss = tf.keras.backend.clip(classification_loss, 1e-4, 1e3)
+                                             lambda : tf.constant(0.0, dtype=tf.float32))
     # loss for segmentation, filter out invalid data
     segmentation_labels = tf.reshape(segmentation_labels, (-1,))
     segmentation_p = tf.reshape(segmentation_p, [-1, ModelConfig.seg_num_classes])
@@ -181,8 +185,7 @@ def model_fn(features, labels, mode, params=None):
     segmentation_pred_classes = tf.dynamic_partition(segmentation_pred_classes, valid_indices, num_partitions=2)[1]
     segmentation_loss = tf.cond(tf.greater(tf.reduce_sum(valid_indices), 1), # at least one sample
                                              lambda : tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(tf.keras.backend.flatten(segmentation_labels), segmentation_p)),
-                                             lambda : tf.constant(1e-4, dtype=tf.float32))
-    segmentation_loss = tf.keras.backend.clip(segmentation_loss, 1e-4, 1e3)
+                                             lambda : tf.constant(0.0, dtype=tf.float32))
     # for debug
     tf.identity(classification_loss, name='classification_loss')
     tf.summary.scalar('classification_loss', classification_loss)
@@ -191,20 +194,20 @@ def model_fn(features, labels, mode, params=None):
     # get trainable weight except bn params
     cl_train_var, seg_train_var = get_train_var(free_vgg=True, bn_trainable=True)
     # Add weight decay to the loss.
-    # segmentation_loss_l2 = segmentation_loss + TrainingConfig.weight_decay * tf.add_n(
-    #     [tf.nn.l2_loss(v) for v in seg_train_var])
-    # classification_loss_l2 = classification_loss + TrainingConfig.weight_decay * tf.add_n(
-    #     [tf.nn.l2_loss(v) for v in cl_train_var])
-    classification_loss_l2 = classification_loss
-    segmentation_loss_l2 = segmentation_loss
+    segmentation_loss_l2 = segmentation_loss + TrainingConfig.weight_decay * tf.add_n(
+        [tf.nn.l2_loss(v) for v in seg_train_var])
+    classification_loss_l2 = classification_loss + TrainingConfig.weight_decay * tf.add_n(
+        [tf.nn.l2_loss(v) for v in cl_train_var])
+    # classification_loss_l2 = classification_loss
+    # segmentation_loss_l2 = segmentation_loss
     total_loss = segmentation_loss_l2 + classification_loss_l2
     tf.identity(total_loss, name='total_loss')
     tf.summary.scalar('total_loss', total_loss)
     classification_acc = tf.metrics.accuracy(classification_labels, classification_pred_classes)
     segmentation_acc = tf.metrics.accuracy(segmentation_labels, segmentation_pred_classes)
-    # mean_iou = tf.metrics.mean_iou(segmentation_labels, segmentation_pred_classes, ModelConfig.num_classes)
+    # mean_iou = tf.metrics.mean_iou(segmentation_labels, segmentation_pred_classes, ModelConfig.seg_num_classes)
     # metrics = {'classification_acc': classification_acc, 'segmentation_px_acc': segmentation_acc, 'mean_iou': mean_iou}
-    metrics = {'segmentation_px_acc': segmentation_acc}
+    metrics = {'segmentation_px_acc': segmentation_acc, 'classification_acc': classification_acc}
     # Create a tensor named train_accuracy for logging purposes
     tf.identity(classification_acc[1], name='classification_acc')
     tf.summary.scalar('classification_acc', classification_acc[1])
@@ -213,9 +216,11 @@ def model_fn(features, labels, mode, params=None):
     # tf.identity(mean_iou[1], name='mean_iou')
     # tf.summary.scalar('mean_iou', mean_iou[1])
     if mode == tf.estimator.ModeKeys.TRAIN:
-        # tf.summary.image('images',
-        #                  tf.concat(axis=2, values=[images, gt_decoded_labels, pred_decoded_labels]),
-        #                  max_outputs=params['tensorboard_images_max_outputs'])  # Concatenate row-wise.
+        tf.summary.image('images',
+                         tf.concat(axis=2, values=[features,
+                                                   tf.concat([255*segmentation_labels_buffer]*3, axis=3),
+                                                   tf.concat([tf.cast(255*segmentation_pred_buffer, tf.float32)]*3, axis=3)]),
+                         max_outputs=6)  # Concatenate row-wise.
 
         global_step = tf.train.get_or_create_global_step()
 

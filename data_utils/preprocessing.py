@@ -27,12 +27,10 @@ def categories_selection(label, interest_label_list):
     :param interest_label_list:
     :return:
     """
-    label_list = []
-    for item in interest_label_list:
-        label_list.append(tf.where(label == item, tf.ones_like(label), tf.zeros_like(label)))
-    label = tf.stack(label_list, axis=2)
-    label = tf.squeeze(label, axis=-1)
-    label = tf.reduce_sum(label, axis=2, keep_dims=True)
+    greater_flag = tf.greater_equal(label, interest_label_list[0])
+    less_flag = tf.less_equal(label, interest_label_list[-1])
+    flag = tf.logical_and(greater_flag, less_flag)
+    label = tf.to_int32(flag)
     return label
 
 
@@ -218,15 +216,16 @@ def resize_or_padding_image(image, seg_labels, height, width):
     :param width:
     :return:
     """
-    image = tf.expand_dims(image, axis=0)
-    seg_labels = tf.expand_dims(seg_labels, axis=0)
-    image = tf.image.resize_bilinear(image, tf.constant([height, width]))
-    label = tf.image.resize_bilinear(seg_labels, tf.constant([height, width]))
-    image = tf.squeeze(image, axis=0)
-    image = tf.cast(image, tf.float32)
-    label = tf.squeeze(label, axis=0)
-    label = tf.cast(label, tf.float32)
-    return image, label
+    # TODO: BUG, cause classification image random noise
+    # image = tf.expand_dims(image, axis=0)
+    # seg_labels = tf.expand_dims(seg_labels, axis=0)
+    # image = tf.image.resize_bilinear(image, tf.constant([height, width]))
+    # label = tf.image.resize_bilinear(seg_labels, tf.constant([height, width]))
+    # image = tf.squeeze(image, axis=0)
+    # image = tf.cast(image, tf.float32)
+    # label = tf.squeeze(label, axis=0)
+    seg_labels = tf.cast(seg_labels, tf.float32)
+    return image, seg_labels
 
 
 def random_flip_left_right_image_and_label(image, label):

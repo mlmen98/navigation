@@ -180,8 +180,8 @@ def preprocess_image(image, cl_class, label, is_training):
     """Preprocess a single image of layout [height, width, depth]."""
     def _preprocess_for_seg(image, label):
         # Randomly scale the image and label.
-        image, label = preprocessing.random_rescale_image_and_label(
-            image, label, ModelConfig.min_scale, ModelConfig.max_scale)
+        # image, label = preprocessing.random_rescale_image_and_label(
+        #     image, label, ModelConfig.min_scale, ModelConfig.max_scale)
         # Randomly crop or pad a [_HEIGHT, _WIDTH] section of the image and label.
         image, label = preprocessing.random_crop_or_pad_image_and_label(
             image, label, ModelConfig.height, ModelConfig.width, ModelConfig.ignore_label)
@@ -193,10 +193,8 @@ def preprocess_image(image, cl_class, label, is_training):
         label = tf.cast(label, tf.float32)
         return image, label
     if is_training:
-        image_height = tf.shape(image)[0]
-        image_width = tf.shape(image)[1]
         # flag for data type: 1 for classification, 0 for semantic segmentation
-        flag = tf.logical_and(tf.equal(image_height, 224), tf.equal(image_width, 224))
+        flag = tf.equal(cl_class, -1)
         # different process method for classification/segmentation data
         image, label = tf.cond(flag, lambda: _preprocess_for_seg(image, label),
                     lambda: preprocessing.resize_or_padding_image(image, label, ModelConfig.height, ModelConfig.width))
@@ -204,46 +202,6 @@ def preprocess_image(image, cl_class, label, is_training):
     image.set_shape([ModelConfig.height, ModelConfig.width, 3])
     label.set_shape([ModelConfig.height, ModelConfig.width, 1])
     return image, cl_class, label
-
-
-def input_fn(is_training, data_dir, batch_size, num_epochs=1):
-    """Input_fn using the tf.data input pipeline.
-
-    Args:
-    is_training: A boolean denoting whether the input is for training.
-    data_dir: The directory containing the input data.
-    batch_size: The number of samples per batch.
-    num_epochs: The number of epochs to repeat the dataset.
-
-    Returns:
-    A tuple of images and labels.
-    """
-    dataset = tf.data.Dataset.from_tensor_slices(get_filenames(is_training, data_dir))
-    dataset = dataset.flat_map(tf.data.TFRecordDataset)
-
-    if is_training:
-        # prepossess
-        dataset = dataset.shuffle(buffer_size=ModelConfig.num_image['train'])
-        dataset = dataset.map(parse_record)
-        dataset = dataset.map(
-          lambda image, cl_class, label: preprocess_image(image, cl_class, label, is_training))
-        dataset = dataset.prefetch(batch_size)
-    # repeat and batch for training
-    dataset = dataset.repeat(num_epochs)
-    dataset = dataset.batch(batch_size)
-    iterator = dataset.make_one_shot_iterator()
-    # return dict for model input
-    labels = dict()
-    images, cl_class, seg_labels = iterator.get_next()
-    labels['cl_class'] = cl_class
-    labels['seg_labels'] = seg_labels
-
-    return images, labels
-
-
-if __name__ == '__main__':
-    data_set, label = read_classification_data('D:\herschel\\navigation\data\classification\\train')
-    pass
 
 
 def eval_input_fn(image_filenames, label_filenames=None, batch_size=1):
@@ -303,3 +261,48 @@ def eval_input_fn(image_filenames, label_filenames=None, batch_size=1):
     images, labels = iterator.get_next()
 
   return images, labels
+
+
+def input_fn(is_training, data_dir, batch_size, num_epochs=1):
+    """Input_fn using the tf.data input pipeline.
+
+    Args:
+    is_training: A boolean denoting whether the input is for training.
+    data_dir: The directory containing the input data.
+    batch_size: The number of samples per batch.
+    num_epochs: The number of epochs to repeat the dataset.
+
+    Returns:
+    A tuple of images and labels.
+    """
+    dataset = tf.data.Dataset.from_tensor_slices(get_filenames(is_training, data_dir))
+    dataset = dataset.flat_map(tf.data.TFRecordDataset)
+
+    if is_training:
+        # prepossess
+        dataset = dataset.shuffle(buffer_size=ModelConfig.num_image['train'])
+        dataset = dataset.map(parse_record)
+        dataset = dataset.map(
+          lambda image, cl_class, label: preprocess_image(image, cl_class, label, is_training))
+        dataset = dataset.prefetch(batch_size)
+    # repeat and batch for training
+    dataset = dataset.repeat(num_epochs)
+    dataset = dataset.batch(batch_size)
+    iterator = dataset.make_one_shot_iterator()
+    # return dict for model input
+    labels = dict()
+    images, cl_class, seg_labels = iterator.get_next()
+    labels['cl_class'] = cl_class
+    labels['seg_labels'] = seg_labels
+
+    return images, labels
+
+
+if __name__ == '__main__':
+    import matplotlib.pyplot as plt
+    import numpy as np
+    sess = tf.InteractiveSession()
+    input_fn(True, './', 1)
+    pass
+
+

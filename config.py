@@ -14,14 +14,14 @@ class ModelConfig(object):
     ignore_label = 255
     bn_decay = 0.9997
     num_image = {
-        'train': 2685,
-        'validation': 500,
+        'train': 3985,
+        'validation': 1500,
     }
 
 
 class TrainingConfig(object):
-    clean_model_dir = True
-    train_epochs = 10
+    clean_model_dir = 0
+    train_epochs = 100
     epochs_per_eval = 1
     tensorboard_images_max_outputs = 6
     batch_size = 8
@@ -34,7 +34,7 @@ class TrainingConfig(object):
     power = 0.9
     momentum = 0.9
     weight_decay = 5e-4 # regulization
-    freeze_batch_norm = True
+    freeze_batch_norm = False
     pre_trained_model = './resnet_v2_50_2017_04_14/resnet_v2_50.ckpt'
     model_dir = './new'
 
