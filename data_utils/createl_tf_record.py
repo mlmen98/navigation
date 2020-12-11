@@ -181,14 +181,19 @@ def main(arg):
     cl_data_val, cl_labels_val = dataset_util.read_classification_data('D:\herschel\\navigation\data\classification\\validation')
     cl_seg_val = [0] * len(cl_labels_val)
     # merge classification and segmentation labels
-    train_data = train_img + cl_data_train
-    train_labels = [seg_cl_label_train + cl_labels_train, train_labels + cl_seg_train]
-    val_data = val_img + cl_data_val
-    val_labels = [seg_cl_label_val + cl_labels_val, val_labels + cl_seg_val]
+    # train_data = train_img + cl_data_train
+    # train_labels = [seg_cl_label_train + cl_labels_train, train_labels + cl_seg_train]
+    # val_data = val_img + cl_data_val
+    # val_labels = [seg_cl_label_val + cl_labels_val, val_labels + cl_seg_val]
+    # generate seperate tfrecord for classification data
+    train_data = cl_data_train
+    train_labels = [cl_labels_train, cl_seg_train]
+    val_data = cl_data_val
+    val_labels = [cl_labels_val, cl_seg_val]
     # output path
     prefix = 'D:\herschel\\navigation\\tf_records'
-    train_output_path = os.path.join(prefix, 'fine_combine_train.record')
-    val_output_path = os.path.join(prefix, 'fine_combine_val.record')
+    train_output_path = os.path.join(prefix, 'cl_train.record')
+    val_output_path = os.path.join(prefix, 'cl_val.record')
 
     create_tf_record_test(train_output_path, train_data, train_labels)
     create_tf_record_test(val_output_path, val_data, val_labels)

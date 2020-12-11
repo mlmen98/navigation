@@ -50,9 +50,9 @@ def classification_branch(x):
     """
     with tf.variable_scope('classification_branch'):
         x = tf.keras.layers.Flatten()(x)
-        x = tf.keras.layers.Dense(512, 'relu')(x)
         x = tf.nn.dropout(x, 0.5)
         x = tf.keras.layers.Dense(ModelConfig.classification_num_classes, activation='softmax')(x)
+        tf.summary.histogram("classification_softmax_output", x)
     return x
 
 
@@ -82,10 +82,14 @@ def model_generator():
         :return: tensor lost of [classification_result, segmentation_result]
         """
         # feature extraction backbone
-        with tf.variable_scope('VGG'):
-            backbone = tf.keras.applications.VGG16(input_tensor=x, include_top=False, pooling=True, weights='imagenet', input_shape=(513, 513, 3))
+        with tf.variable_scope('ResNet'):
+            # to address error about bn and dropout by disable them
+            tf.keras.backend.set_learning_phase(False)
+            backbone = tf.keras.applications.ResNet50(input_tensor=x, include_top=False, pooling='avg', weights='imagenet', input_shape=(512, 512, 3))
+            # for layer_item in backbone.layers:
+            #     layer_item.trainable = False
         # extract block-4 of vgg with downsample of 3 times(8)
-        feature_for_segmentation = backbone.get_layer('block4_conv3').output
+        feature_for_segmentation = backbone.get_layer('activation_22').output
         feature_for_classification = backbone.output
         # both branch output probabilities not logits
         # branch 0 for classification
@@ -97,9 +101,9 @@ def model_generator():
 
 
 def split_vgg_var():
-    all_var = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, 'VGG')
-    head_var = all_var[:20]
-    tail_var = all_var[20:]
+    all_var = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, 'ResNet')
+    head_var = all_var[:144]
+    tail_var = all_var[144:]
     return head_var, tail_var
 
 
@@ -125,7 +129,7 @@ def get_train_var(free_vgg, bn_trainable):
     classification_train_var = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, 'classification_branch')
     segmentation_train_var = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, 'segmentation_branch')
     if not free_vgg:
-        classification_train_var += tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, 'VGG')
+        classification_train_var += tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, 'ResNet')
         segmentation_train_var += vgg_head_var
     if not bn_trainable:
         classification_train_var = drop_bn_weight(classification_train_var)
@@ -167,40 +171,40 @@ def model_fn(features, labels, mode, params=None):
             })
     # optimization opt
     # loss for classification branch, filter out invalid data
-    valid_indices = tf.to_int32(classification_labels >= 0)
-    classification_p = tf.dynamic_partition(classification_p, valid_indices, num_partitions=2)[1]
-    classification_labels = tf.dynamic_partition(classification_labels, valid_indices, num_partitions=2)[1]
-    classification_pred_classes = tf.dynamic_partition(classification_pred_classes, valid_indices, num_partitions=2)[1]
-    # set classification_loss close to zero(1e-4) if there're no classification sample input
-    classification_loss = tf.cond(tf.greater(tf.reduce_sum(valid_indices), 1), # at least one sample
-                                             lambda : tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(classification_labels, classification_p)),
-                                             lambda : tf.constant(0.0, dtype=tf.float32))
+    cl_train_var, seg_train_var = get_train_var(free_vgg=True, bn_trainable=False)
+    with tf.device('/gpu:0'):
+        valid_indices = tf.to_int32(classification_labels >= 0)
+        classification_p = tf.dynamic_partition(classification_p, valid_indices, num_partitions=2)[1]
+        classification_labels = tf.dynamic_partition(classification_labels, valid_indices, num_partitions=2)[1]
+        classification_pred_classes = tf.dynamic_partition(classification_pred_classes, valid_indices, num_partitions=2)[1]
+        # set classification_loss close to zero(1e-4) if there're no classification sample input
+        classification_loss = tf.cond(tf.greater(tf.reduce_sum(valid_indices), 1), # at least one sample
+                                                 lambda : tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(classification_labels, classification_p)),
+                                                 lambda : tf.constant(0.0, dtype=tf.float32))
+        classification_loss_l2 = classification_loss + TrainingConfig.weight_decay * tf.add_n(
+            [tf.nn.l2_loss(v) for v in cl_train_var])
+        # classification_loss_l2 = classification_loss
     # loss for segmentation, filter out invalid data
-    segmentation_labels = tf.reshape(segmentation_labels, (-1,))
-    segmentation_p = tf.reshape(segmentation_p, [-1, ModelConfig.seg_num_classes])
-    valid_indices = tf.to_int32(segmentation_labels < 255)
-    segmentation_labels = tf.dynamic_partition(segmentation_labels, valid_indices, num_partitions=2)[1]
-    segmentation_p = tf.dynamic_partition(segmentation_p, valid_indices, num_partitions=2)[1]
-    segmentation_pred_classes = tf.reshape(segmentation_pred_classes, (-1,))
-    segmentation_pred_classes = tf.dynamic_partition(segmentation_pred_classes, valid_indices, num_partitions=2)[1]
-    segmentation_loss = tf.cond(tf.greater(tf.reduce_sum(valid_indices), 1), # at least one sample
-                                             lambda : tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(tf.keras.backend.flatten(segmentation_labels), segmentation_p)),
-                                             lambda : tf.constant(0.0, dtype=tf.float32))
+    with tf.device('/gpu:1'):
+        segmentation_labels = tf.reshape(segmentation_labels, (-1,))
+        segmentation_p = tf.reshape(segmentation_p, [-1, ModelConfig.seg_num_classes])
+        valid_indices = tf.to_int32(segmentation_labels < 255)
+        segmentation_labels = tf.dynamic_partition(segmentation_labels, valid_indices, num_partitions=2)[1]
+        segmentation_p = tf.dynamic_partition(segmentation_p, valid_indices, num_partitions=2)[1]
+        segmentation_pred_classes = tf.reshape(segmentation_pred_classes, (-1,))
+        segmentation_pred_classes = tf.dynamic_partition(segmentation_pred_classes, valid_indices, num_partitions=2)[1]
+        segmentation_loss = tf.cond(tf.greater(tf.reduce_sum(valid_indices), 1), # at least one sample
+                                                 lambda : tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(tf.keras.backend.flatten(segmentation_labels), segmentation_p)),
+                                                 lambda : tf.constant(0.0, dtype=tf.float32))
+        segmentation_loss_l2 = segmentation_loss + TrainingConfig.weight_decay * tf.add_n(
+            [tf.nn.l2_loss(v) for v in seg_train_var])
+        # segmentation_loss_l2 = segmentation_loss
+    total_loss = segmentation_loss_l2 + classification_loss_l2
     # for debug
     tf.identity(classification_loss, name='classification_loss')
     tf.summary.scalar('classification_loss', classification_loss)
     tf.identity(segmentation_loss, name='segmentation_loss')
     tf.summary.scalar('segmentation_loss', segmentation_loss)
-    # get trainable weight except bn params
-    cl_train_var, seg_train_var = get_train_var(free_vgg=True, bn_trainable=True)
-    # Add weight decay to the loss.
-    segmentation_loss_l2 = segmentation_loss + TrainingConfig.weight_decay * tf.add_n(
-        [tf.nn.l2_loss(v) for v in seg_train_var])
-    classification_loss_l2 = classification_loss + TrainingConfig.weight_decay * tf.add_n(
-        [tf.nn.l2_loss(v) for v in cl_train_var])
-    # classification_loss_l2 = classification_loss
-    # segmentation_loss_l2 = segmentation_loss
-    total_loss = segmentation_loss_l2 + classification_loss_l2
     tf.identity(total_loss, name='total_loss')
     tf.summary.scalar('total_loss', total_loss)
     classification_acc = tf.metrics.accuracy(classification_labels, classification_pred_classes)
@@ -245,20 +249,28 @@ def model_fn(features, labels, mode, params=None):
         # Create a tensor named learning_rate for logging purposes
         tf.identity(learning_rate, name='learning_rate')
         tf.summary.scalar('learning_rate', learning_rate)
-
-        optimizer_cl = tf.train.MomentumOptimizer(
-            learning_rate=learning_rate,
-            momentum=TrainingConfig.momentum)
-        optimizer_seg = tf.train.MomentumOptimizer(
-            learning_rate=learning_rate,
-            momentum=TrainingConfig.momentum)
-        # optimizer = tf.train.AdamOptimizer(learning_rate=1e-2)
+        with tf.device('/gpu:0'):
+            optimizer_cl = tf.train.MomentumOptimizer(
+                learning_rate=TrainingConfig.lr_for_classification,
+                momentum=TrainingConfig.momentum)
+        with tf.device('/gpu:1'):
+            optimizer_seg = tf.train.MomentumOptimizer(
+                learning_rate=learning_rate,
+                momentum=TrainingConfig.momentum)
+        # optimizer = tf.train.MomentumOptimizer(
+        #     learning_rate=learning_rate,
+        #     momentum=TrainingConfig.momentum)
+        # optimizer_cl = tf.train.AdamOptimizer(learning_rate=learning_rate)
 
         # Batch norm requires update ops to be added as a dependency to the train_op
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
-            train_op_cl = optimizer_cl.minimize(classification_loss_l2, global_step, var_list=cl_train_var)
-            train_op_seg = optimizer_seg.minimize(segmentation_loss_l2, global_step, var_list=seg_train_var)
+            with tf.device('/gpu:0'):
+                train_op_cl = optimizer_cl.minimize(classification_loss_l2, global_step, var_list=cl_train_var)
+            with tf.device('/gpu:1'):
+                train_op_seg = optimizer_seg.minimize(segmentation_loss_l2, global_step, var_list=seg_train_var)
+            # train_var = tf.trainable_variables()
+            # train_op = optimizer.minimize(total_loss, global_step, var_list=cl_train_var + seg_train_var)
             train_op = tf.group(train_op_cl, train_op_seg)
             # train_op = train_op_cl
     else:

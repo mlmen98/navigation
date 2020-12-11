@@ -133,9 +133,9 @@ def get_filenames(is_training, data_dir):
     A list of file names.
   """
   if is_training:
-    return ['D:\herschel\\navigation\\tf_records\\fine_combine_train.record']
+    return [ModelConfig.train_tfrecord_dir]
   else:
-    return ['D:\herschel\\navigation\\tf_records\\fine_combine_val.record']
+    return [ModelConfig.val_tfrecord_dir]
 
 
 def parse_record(raw_record):

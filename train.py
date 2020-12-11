@@ -49,32 +49,33 @@ def main(unused_argv):
     }
 
     logging_hook = tf.train.LoggingTensorHook(
-        tensors=tensors_to_log, every_n_iter=1)
+        tensors=tensors_to_log, every_n_iter=10)
     train_hooks = [logging_hook]
-    eval_hooks = None
+    # eval_hooks = None
 
     if ModelConfig.debug:
       debug_hook = tf_debug.LocalCLIDebugHook()
       train_hooks.append(debug_hook)
-      eval_hooks = [debug_hook]
+      # eval_hooks = [debug_hook]
 
     tf.logging.info("Start training.")
+    tf.keras.backend.clear_session()
     model.train(
         input_fn=lambda: input_fn(True, ModelConfig.data_dir, TrainingConfig.batch_size, TrainingConfig.epochs_per_eval),
         hooks=train_hooks,
         # steps=1  # For debugging
     )
 
-    tf.logging.info("Start evaluation.")
+    # tf.logging.info("Start evaluation.")
     
     # Evaluate the model and print results
-    eval_results = model.evaluate(
-        # Batch size must be 1 for testing because the images' size differs
-        input_fn=lambda: input_fn(False, ModelConfig.data_dir, 1),
-        hooks=eval_hooks,
-        # steps=1  # For debug
-    )
-    print(eval_results)
+    # eval_results = model.evaluate(
+    #     # Batch size must be 1 for testing because the images' size differs
+    #     input_fn=lambda: input_fn(False, ModelConfig.data_dir, 1),
+    #     hooks=eval_hooks,
+    #     # steps=1  # For debug
+    # )
+    # print(eval_results)
 
 
 if __name__ == '__main__':
