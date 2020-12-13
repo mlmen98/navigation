@@ -184,13 +184,13 @@ def preprocess_image(image, cl_class, label, is_training):
         #     image, label, ModelConfig.min_scale, ModelConfig.max_scale)
         # Randomly crop or pad a [_HEIGHT, _WIDTH] section of the image and label.
         image, label = preprocessing.random_crop_or_pad_image_and_label(
-            image, label, ModelConfig.height, ModelConfig.width, ModelConfig.ignore_label)
+            image, label, ModelConfig.height, ModelConfig.width, None)
         # Randomly flip the image and label horizontally.
         image, label = preprocessing.random_flip_left_right_image_and_label(
             image, label)
         label = preprocessing.categories_selection(label, ModelConfig.interest_label)
         image = tf.cast(image, tf.float32)
-        label = tf.cast(label, tf.float32)
+        label = tf.cast(label, tf.int32)
         return image, label
     if is_training:
         # flag for data type: 1 for classification, 0 for semantic segmentation
@@ -198,6 +198,7 @@ def preprocess_image(image, cl_class, label, is_training):
         # different process method for classification/segmentation data
         image, label = tf.cond(flag, lambda: _preprocess_for_seg(image, label),
                     lambda: preprocessing.resize_or_padding_image(image, label, ModelConfig.height, ModelConfig.width))
+
     # select interested labels
     image.set_shape([ModelConfig.height, ModelConfig.width, 3])
     label.set_shape([ModelConfig.height, ModelConfig.width, 1])
@@ -277,11 +278,10 @@ def input_fn(is_training, data_dir, batch_size, num_epochs=1):
     """
     dataset = tf.data.Dataset.from_tensor_slices(get_filenames(is_training, data_dir))
     dataset = dataset.flat_map(tf.data.TFRecordDataset)
-
+    dataset = dataset.map(parse_record)
     if is_training:
         # prepossess
         dataset = dataset.shuffle(buffer_size=ModelConfig.num_image['train'])
-        dataset = dataset.map(parse_record)
         dataset = dataset.map(
           lambda image, cl_class, label: preprocess_image(image, cl_class, label, is_training))
         dataset = dataset.prefetch(batch_size)
@@ -299,10 +299,10 @@ def input_fn(is_training, data_dir, batch_size, num_epochs=1):
 
 
 if __name__ == '__main__':
-    import matplotlib.pyplot as plt
-    import numpy as np
-    sess = tf.InteractiveSession()
-    input_fn(True, './', 1)
+    # import matplotlib.pyplot as plt
+    # import numpy as np
+    # sess = tf.InteractiveSession()
+    # input_fn(False, './', 4)
     pass
 
 

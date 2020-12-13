@@ -224,7 +224,7 @@ def resize_or_padding_image(image, seg_labels, height, width):
     # image = tf.squeeze(image, axis=0)
     # image = tf.cast(image, tf.float32)
     # label = tf.squeeze(label, axis=0)
-    seg_labels = tf.cast(seg_labels, tf.float32)
+    seg_labels = tf.cast(seg_labels, tf.int32)
     return image, seg_labels
 
 
