@@ -8,7 +8,7 @@ class ModelConfig(object):
     debug = False
     interest_label = [6, 7, 8, 9, 10] # road/flat/sidewalk etc.
     seg_num_classes = 2 # foreground/background
-    classification_categories = ['move_forward', 'turn_left', 'turn_right', 'turn_around', 'target_found']
+    classification_categories = ['turn_left', ' turn_right', 'adjust_left', 'adjust_right', 'move_forward', 'turn_around', 'target_found']
     classification_num_classes = len(classification_categories)
     height = 512
     width = 512

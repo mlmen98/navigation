@@ -4,7 +4,7 @@ from data_utils import dataset_util
 import PIL
 import tensorflow as tf
 import io
-from config import ModelConfig
+from config_old import ModelConfig
 import cv2
 
 
@@ -26,15 +26,15 @@ def interested_labels(label):
     return label
 
 
-def get_label(image_dir):
+def get_label(image_dir, folder='train'):
     """
     get corresponding label path given image
     :return:
     """
     sample_name = image_dir.split('\\')[-1].split('_left')[0] + '_gtFine_labelIds.png'
     sub_folder = sample_name.split('_')[0]
-    prefix = 'D:\\herschel\\navigation\\data\\gtFine_trainvaltest\\gtFine\\train\\'
-    label_dir = os.path.join(prefix, sub_folder, sample_name)
+    prefix = 'D:\\herschel\\navigation\\data\\gtFine_trainvaltest\\gtFine\\'
+    label_dir = os.path.join(prefix, folder, sub_folder, sample_name)
     if os.path.exists(label_dir):
         return label_dir
     else:
@@ -43,7 +43,7 @@ def get_label(image_dir):
 
 
 def classification_generator(data_folder='train', batch_size=16):
-    class_list = ['turn_left', ' turn_right', 'move_forward', 'turn_around', 'target_found']
+    class_list = ModelConfig.classification_categories
     data_folder = 'D:\herschel\\navigation\data\classification\\' + data_folder
     samples = []
     labels = []
@@ -75,8 +75,14 @@ def classification_generator(data_folder='train', batch_size=16):
 
 
 def segmentation_generator(data_folder='train', batch_size=16):
+    """
+    generate data for training from cityscape dataset
+    :param data_folder:
+    :param batch_size:
+    :return:
+    """
     samples= dataset_util.get_file_list('D:\herschel\\navigation\data\leftImg8bit_trainvaltest\leftImg8bit\\'+data_folder)
-    labels = [get_label(item) for item in samples]
+    labels = [get_label(item, data_folder) for item in samples]
     samples = np.array(samples)
     labels = np.array(labels)
     shuffle_index = np.arange(0, len(samples))
@@ -107,6 +113,51 @@ def segmentation_generator(data_folder='train', batch_size=16):
             batch_label.append(label)
         batch_data = np.stack(batch_data, axis=0).astype(np.float32)
         batch_label = np.stack(batch_label, axis=0).astype(np.float32)
+        batch_label = np.expand_dims(batch_label, 3)
+        yield batch_data, batch_label
+
+
+def segmentation_generator_test(batch_size=16):
+    """
+    segmentation generator for self provided dataset
+    :param batch_size:
+    :return:
+    """
+    samples = dataset_util.get_file_list('D:\herschel\\navigation\data\indoor_nav\\new\TrainingLabelData')
+    labels = dataset_util.get_file_list('D:\herschel\\navigation\data\indoor_nav\\new\PixelLabelData')
+    samples = np.array(samples)
+    labels = np.array(labels)
+    shuffle_index = np.arange(0, len(samples))
+    np.random.shuffle(shuffle_index)
+    samples = (samples[shuffle_index])
+    labels = (labels[shuffle_index])
+    while True:
+        batch_index = np.random.randint(0, len(samples), batch_size)
+        batch_data_list = list(samples[batch_index])
+        batch_label_list = list(labels[batch_index])
+        batch_data = []
+        batch_label = []
+        for img_item, label_item in zip(batch_data_list, batch_label_list):
+            # read img
+            with tf.gfile.GFile(img_item, 'rb') as fid:
+                encoded_jpg = fid.read()
+            encoded_jpg_io = io.BytesIO(encoded_jpg)
+            image = np.array(PIL.Image.open(encoded_jpg_io))
+            image = resize(image)
+            batch_data.append(image)
+            # read labels
+            with tf.gfile.GFile(label_item, 'rb') as fid:
+                encoded_jpg = fid.read()
+            encoded_jpg_io = io.BytesIO(encoded_jpg)
+            label = np.array(PIL.Image.open(encoded_jpg_io))
+            label[label > 0] = 1
+            label = np.squeeze(label)
+            label = resize(label)
+            label = interested_labels(label)
+            batch_label.append(label)
+        batch_data = np.stack(batch_data, axis=0).astype(np.float32)
+        batch_label = np.stack(batch_label, axis=0).astype(np.float32)
+        batch_label = np.expand_dims(batch_label, 3)
         yield batch_data, batch_label
 
 
@@ -114,9 +165,12 @@ def combine_generator(folder='train', batch_size=16):
     # 255 mean invalid labels
     assert folder in ['train', 'val'], 'folder must be train or val'
     batch_size = int(batch_size // 2)
+    i = 0
     while True:
         cl_imgs, cl_labels = next(classification_generator(folder, batch_size))
         seg_imgs, seg_labels = next(segmentation_generator(folder, batch_size))
+        seg_imgs, seg_labels = next(segmentation_generator_test(batch_size))
+        seg_labels = np.squeeze(seg_labels)
         data = np.concatenate([cl_imgs, seg_imgs], axis=0).astype(np.float32)
         cl_labels = np.concatenate([cl_labels, 255*np.ones(shape=(batch_size, ))]).astype(np.int16)
         cl_labels = cl_labels.reshape((-1, ))
@@ -126,6 +180,10 @@ def combine_generator(folder='train', batch_size=16):
 
 
 if __name__ == '__main__':
-    data, labels = next(combine_generator())
-    cl_labels, seg_labels = labels
-    pass
+    from keras_implementation.visualization import apply_mask
+    import matplotlib.pyplot as plt
+    data, labels = next(segmentation_generator())
+    color = [0, 75, 75]
+    img = apply_mask(data[0], np.squeeze(labels[0]), color)
+    img = np.uint8(img)
+    plt.imsave('test.png', img)
