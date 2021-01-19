@@ -14,6 +14,8 @@ import io
 from config_old import ModelConfig
 import matplotlib.pyplot as plt
 import itertools
+import keras
+import seaborn as sns
 from keras_implementation.train_utils import iou_metric_batch
 
 
@@ -100,11 +102,71 @@ def load_data():
     return classification_data, classification_label, segmentation_data, segmentation_label
 
 
+def visualization_before_activation():
+    """
+    visualize the output of final feature layer before activation function of each branch
+    :return:
+    """
+    # load data
+    cl_data, cl_label, seg_data, seg_label = load_data()
+    # load model for evaluation
+    # model_type = Modelconfig_new.backbone
+    model_type = 'ResNet'
+    # model_type = 'VGG'
+    # load pretrain model
+    model_dir_list = [model_type + item for item in ['_segmentation_model_on_cityscape']]
+    model_wrapper_pre = Model(model_dir_list)
+    # load finetune model
+    model_dir_list = [model_type + item for item in ['_segmentation_model', '_classification_model']]
+    model_wrapper_fine = Model(model_dir_list)
+
+    # model = model_wrapper.unit_model
+    # segmentation_layer = model.get_layer('segmentation')
+    # segmentation_layer.activation = None
+    # classification_layer = model.get_layer('classification')
+    # classification_layer.activation = None
+    # model = keras.models.Model(model.input, [classification_layer.output, segmentation_layer.output])
+    # model_wrapper.unit_model = model
+
+    # result for pretrain model
+    cl_result_pre, _ = model_wrapper_pre.inference(cl_data)
+    # _, seg_result_pre = model_wrapper_pre.inference(seg_data)
+    # seg_result_pre = seg_result_pre[:, :, :, 1]
+    # result for finetune model
+    cl_result_fine, _ = model_wrapper_fine.inference(cl_data)
+    # _, seg_result_fine = model_wrapper_fine.inference(seg_data)
+    # seg_result_fine = seg_result_fine[:, :, :, 1]
+    # visualization
+    plt.subplot(121)
+    yticklabels = False
+    xticklabels = ModelConfig.classification_categories
+    ax = sns.heatmap(cl_result_pre, xticklabels=xticklabels, yticklabels=yticklabels, cbar=False)
+    ax.set_title('Activation From Pretrained Model', fontsize=8)
+    ax.set_ylabel('Sample Index', fontsize=8)
+    # ax.set_xlabel('Softmax Activation Vector')
+    # 设置坐标字体方向
+    label_x = ax.get_xticklabels()
+    plt.setp(label_x, rotation=30, horizontalalignment='right', fontsize=6)
+    # plt.show()
+    plt.subplot(122)
+    yticklabels = False
+    xticklabels = ModelConfig.classification_categories
+    ax = sns.heatmap(cl_result_fine, xticklabels=xticklabels, yticklabels=yticklabels)
+    ax.set_title('Activation From Finetuned Model', fontsize=8)
+    # ax.set_xlabel('Softmax Activation Vector', fontsize=8)
+    # 设置坐标字体方向
+    label_x = ax.get_xticklabels()
+    plt.setp(label_x, rotation=30, horizontalalignment='right', fontsize=6)
+    plt.suptitle('Variant 1: '+model_type, fontsize=16)
+    plt.savefig(model_type + '_activation.eps', format='eps', dpi=1000)
+    return
+
+
 def main():
     # load model for evaluation
     model_type = Modelconfig_new.backbone
     # model_type = 'ResNet'
-    model_dir_list = [model_type + item for item in ['_merge_model', '_segmentation_model_on_cityscape', '_classification_model']]
+    model_dir_list = [model_type + item for item in ['_merge_model', '_segmentation_model', '_classification_model']]
     model = Model(model_dir_list)
     # load data
     cl_data, cl_label, seg_data, seg_label = load_data()
@@ -113,16 +175,17 @@ def main():
     cl_cl = np.argmax(cl_cl, axis=-1)
     # predictive label for seg data
     seg_cl, seg_seg = model.inference(seg_data)
-    iou = iou_metric_batch(seg_label, seg_seg)
+    # iou = iou_metric_batch(seg_label, seg_seg)
     seg_seg = np.argmax(seg_seg, axis=-1)
     cl_cm = confusion_matrix(cl_label, cl_cl)
-    seg_cm = confusion_matrix(seg_label.flatten(), seg_seg.flatten())
+    # seg_cm = confusion_matrix(seg_label.flatten(), seg_seg.flatten())
     print (cl_cm)
-    print (seg_cm)
-    print (iou)
+    # print (seg_cm)
+    # print (iou)
 
 
 if __name__ == '__main__':
-    main()
+    # main()
+    visualization_before_activation()
 
 

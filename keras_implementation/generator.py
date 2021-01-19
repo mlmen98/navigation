@@ -182,8 +182,14 @@ def combine_generator(folder='train', batch_size=16):
 if __name__ == '__main__':
     from keras_implementation.visualization import apply_mask
     import matplotlib.pyplot as plt
-    data, labels = next(segmentation_generator())
-    color = [0, 75, 75]
-    img = apply_mask(data[0], np.squeeze(labels[0]), color)
-    img = np.uint8(img)
-    plt.imsave('test.png', img)
+    while True:
+        data, labels = next(segmentation_generator())
+        if np.sum(labels) > 0:
+            color = [0, 75, 75]
+            img = apply_mask(data[0], np.squeeze(labels[0]), color)
+            img = np.uint8(img)
+            # plt.imsave('test.png', img)
+            plt.imshow(img)
+            plt.show()
+        else:
+            continue
